@@ -1,0 +1,12 @@
+DELIVERY RECEIPT
+Receipt No. DR-2026-1116-07
+Date: 11/16/2026
+Deliver to: Department of Robotics, Sample Institute of Technology
+From: Example Robotics Supply Co., Tel: (555) 010-4567
+Item | Description | Qty
+SV-2040 | Micro servo motor | 4
+M3-8-PH100 | M3×8 screw (100 pcs) | 2
+USBC-1M | USB-C cable, 1.0 m | 3
+Received by (Seal)
+Please stamp the box on the right
+to confirm that you received the items.

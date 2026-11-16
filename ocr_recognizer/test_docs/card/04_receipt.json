@@ -1,0 +1,12 @@
+{
+  "stamp_center_mm": [
+    78.0,
+    110.0
+  ],
+  "stamp_center_reading_mm": [
+    110.0,
+    132.0
+  ],
+  "stamp_box_size_mm": 24.0,
+  "note": "stamp_center_mm is in the card frame of card_target_publisher (x right, y down on the sheet as printed)"
+}

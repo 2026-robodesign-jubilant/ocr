@@ -13,6 +13,8 @@
     .venv/bin/pip install weasyprint pypdf
     .venv/bin/python make_cards.py
 """
+import json
+from html import escape
 from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter
@@ -47,6 +49,9 @@ th { background: #e6e6e6; font-weight: bold; }
 .small { font-size: 6.5pt; line-height: 1.4; }
 .big { font-size: 10pt; font-weight: bold; }
 .sum { width: 50%%; margin-left: auto; }
+/* 押印欄（読む向きで位置を mm で固定する。答え合わせのため流し込みの外に置く） */
+.seal { position: absolute; border: 0.5mm solid #000; }
+.abs { position: absolute; font-family: '%(font)s'; font-size: %(base)s; line-height: 1.4; white-space: nowrap; }
 """
 
 SERIF, SANS = 'Liberation Serif', 'Liberation Sans'
@@ -97,7 +102,29 @@ CARDS = [
               '• Age: 12 and up; no experience needed'),
         lines('Register by November 30 at robots@example.edu', align='center'),
     ], SANS),
+    ('04_receipt', '7.5pt', [
+        title('DELIVERY RECEIPT'),
+        lines('Receipt No. DR-2026-1116-07', 'Date: 11/16/2026', align='right'),
+        lines('Deliver to: Department of Robotics, Sample Institute of Technology'),
+        lines('From: Example Robotics Supply Co., Tel: (555) 010-4567'),
+        table([
+            ['Item', 'Description', 'Qty'],
+            ['SV-2040', 'Micro servo motor', '4'],
+            ['M3-8-PH100', 'M3×8 screw (100 pcs)', '2'],
+            ['USBC-1M', 'USB-C cable, 1.0 m', '3'],
+        ], aligns=['left', 'left', 'right'], widths=['28%', '56%', '16%']),
+    ], SANS),
 ]
+
+
+# 押印欄のあるカード。名前 → (中心の左右位置 u, 上下位置 v, 一辺) すべて読む向きの mm。
+# 台紙の向き（card 座標系）では x = 210 - v、y = u になる。答えは card/<名前>.json に書き出す
+STAMP_BOXES = {
+    '04_receipt': (110.0, 132.0, 24.0),
+}
+STAMP_LABELS = {
+    '04_receipt': ('Received by (Seal)', 'Please stamp the box on the right', 'to confirm that you received the items.'),
+}
 
 
 def build(name, base, parts, font):
@@ -105,8 +132,17 @@ def build(name, base, parts, font):
     css = CSS % {'w': CARD_W, 'h': CARD_H, 'side': SAFE_SIDE, 'top': SAFE_TOP,
                  'safe_h': safe_h, 'font': font, 'base': base}
     body = ''.join(p[0] for p in parts)
+    extra = ''
+    if name in STAMP_BOXES:
+        u, v, size = STAMP_BOXES[name]
+        label, *note = STAMP_LABELS[name]
+        extra = (f'<div class="seal" style="left:{u - size / 2}mm; top:{v - size / 2}mm; '
+                 f'width:{size}mm; height:{size}mm"></div>'
+                 f'<div class="abs" style="left:{u - size / 2}mm; top:{v - size / 2 - 5}mm">{escape(label)}</div>'
+                 f'<div class="abs" style="left:{SAFE_SIDE}mm; top:{v - 4}mm">'
+                 + '<br>'.join(escape(t) for t in note) + '</div>')
     html = (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><style>{css}</style></head>'
-            f'<body><div class="card"><div class="safe">{body}</div></div></body></html>')
+            f'<body><div class="card"><div class="safe">{body}</div>{extra}</div></body></html>')
     text_pdf = HTML(string=html).write_pdf()
 
     # 台紙（マーカー）に文字を重ねる
@@ -117,7 +153,18 @@ def build(name, base, parts, font):
     writer.add_metadata({'/Title': f'{name} (ArUco card, IDs 1-4)'})
     with open(OUT / f'{name}.pdf', 'wb') as f:
         writer.write(f)
-    (OUT / f'{name}.txt').write_text('\n'.join(t for p in parts for t in p[1]) + '\n', encoding='utf-8')
+    texts = [t for p in parts for t in p[1]]
+    if name in STAMP_BOXES:
+        texts += list(STAMP_LABELS[name])
+        u, v, size = STAMP_BOXES[name]
+        answer = {
+            'stamp_center_mm': [CARD_H - v, u],   # 台紙の向き（card 座標系）、紙の左上からの mm
+            'stamp_center_reading_mm': [u, v],    # 読む向き、紙の左上からの mm
+            'stamp_box_size_mm': size,
+            'note': 'stamp_center_mm is in the card frame of card_target_publisher (x right, y down on the sheet as printed)',
+        }
+        (OUT / f'{name}.json').write_text(json.dumps(answer, indent=2) + '\n', encoding='utf-8')
+    (OUT / f'{name}.txt').write_text('\n'.join(texts) + '\n', encoding='utf-8')
     print(f'card/{name}.pdf / card/{name}.txt')
 
 
