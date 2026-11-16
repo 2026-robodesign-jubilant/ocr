@@ -36,7 +36,7 @@ read -rs ANTHROPIC_API_KEY && export ANTHROPIC_API_KEY
 ## Python 版
 
 ```bash
-cd src/ocr_ai
+cd ~/ros2/jubilant_ws/src/ocr/ocr_ai
 python3 -m venv .venv                # 最初の 1 回だけ
 source .venv/bin/activate
 pip install anthropic pydantic
@@ -55,7 +55,7 @@ Claude には Rust 用の公式ライブラリがないので、`reqwest` で AP
 - 返ってきた JSON を `serde_json::from_str` で構造体 `Reading` に変換する
 
 ```bash
-cd src/ocr_ai/claude_rs
+cd ~/ros2/jubilant_ws/src/ocr/ocr_ai/claude_rs
 cargo run
 ```
 

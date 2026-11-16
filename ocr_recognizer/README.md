@@ -118,8 +118,10 @@ colcon が中の `.venv` などを ROS のパッケージと勘違いしない�
 
 ノードは Claude の SDK（`anthropic`）を使う。システムの Python には入っていないので、**ROS も使える仮想環境**を作って入れる。
 
+ワークスペースは `~/ros2/jubilant_ws`、このリポジトリはその `src/ocr` に置く前提（`git clone https://github.com/2026-robodesign-jubilant/ocr.git ~/ros2/jubilant_ws/src/ocr`）。
+
 ```bash
-cd ~/github/4s_robodesign_jubilant
+cd ~/ros2/jubilant_ws
 python3 -m venv --system-site-packages .venv     # ROS・OpenCV もそのまま使える仮想環境
 touch .venv/COLCON_IGNORE                         # colcon に中を探させない
 .venv/bin/pip install anthropic "pydantic>=2" "brotli>=1.2"
@@ -130,10 +132,10 @@ sudo apt install ros-jazzy-image-publisher        # カメラなしで試すと�
 
 ### ビルドと実行
 
-**必ずリポジトリのルートで** ビルドする（パッケージの中で実行すると、そこに `build/` `install/` `log/` ができてしまう）。
+**必ずワークスペースのルート（`~/ros2/jubilant_ws`）で** ビルドする（リポジトリやパッケージの中で実行すると、そこに `build/` `install/` `log/` ができてしまう）。
 
 ```bash
-cd ~/github/4s_robodesign_jubilant
+cd ~/ros2/jubilant_ws
 source .venv/bin/activate                              # 端末を開くたびに
 source install/setup.bash                              # 端末を開くたびに（ビルド後）
 read -rs ANTHROPIC_API_KEY && export ANTHROPIC_API_KEY # 端末を開くたびに。キーは画面にも履歴にも残らない
@@ -147,7 +149,7 @@ ros2 run ocr_recognizer ocr_node
 ```bash
 # 別の端末で。カードを斜めに撮った想定の合成画像を、カメラと同じトピック名で 1 秒に 2 回流す
 ros2 run image_publisher image_publisher_node \
-  src/ocr_recognizer/test_docs/card/sim_02_invoice.jpg \
+  src/ocr/ocr_recognizer/test_docs/card/sim_02_invoice.jpg \
   --ros-args -r image_raw:=/camera/camera/color/image_raw -p publish_rate:=2.0
 ```
 
@@ -173,13 +175,39 @@ ros2 run image_publisher image_publisher_node \
 - `package.xml` の `<depend>` は重複・大文字小文字の違いがあると、パッケージとして読み込まれない
 - エラーが出たら、Python のエラーは**一番下の行**から読む。`/opt/ros/...` の行は ROS の内部なので読み飛ばしてよい
 
+## Docker で動かす（本番用）
+
+本番では、チームそれぞれのノードを Docker でまとめて動かす。OCR 班の分は、リポジトリのルートの [`compose.yaml`](../compose.yaml) にある 2 つのサービス。
+
+| サービス | 中身 |
+|---|---|
+| `ocr` | このパッケージ（[`Dockerfile`](Dockerfile)）。ROS 2 Jazzy ＋ cv_bridge ＋ OpenCV ＋ anthropic。起動すると `ocr_node` が動く |
+| `voicevox` | VOICEVOX ENGINE の公式イメージ（`voicevox/voicevox_engine:cpu-ubuntu24.04-0.26.0`）。デスクトップ版のアプリの代わり |
+
+```bash
+cd ~/ros2/jubilant_ws/src/ocr
+read -rs ANTHROPIC_API_KEY && export ANTHROPIC_API_KEY   # キーはファイルに書かない。この端末の値がコンテナに渡る
+docker compose up --build                                # 初回はイメージ作成に数分かかる
+```
+
+- **デスクトップ版の VOICEVOX アプリは閉じておく**（同じ 50021 番を使うので、ぶつかる）
+- 止めるときは `Ctrl+C`、片付けるときは `docker compose down`
+- カメラなしで試すときは、ホストで写真を流す（上の「カメラなしで試す」と同じ）。コンテナはホストのネットワークを使うので、そのまま届く
+
+**つくりの要点**（他の班が自分の Dockerfile を書くときの参考にもなる）
+- **ROS 2 の通信**：`network_mode: host` と `ipc: host` で、ホストや他のコンテナのノードと直接やりとりする。`ROS_DOMAIN_ID` はチームでそろえる
+- **`FASTDDS_BUILTIN_TRANSPORTS=UDPv4`**：コンテナは root で動くので、ホストの一般ユーザーのノードと共有メモリで通信しようとすると失敗することがある。UDP だけを使わせて避けている
+- **音**：コンテナの中の `aplay` を、ホストの PulseAudio / PipeWire（`$XDG_RUNTIME_DIR/pulse/native`）につないで鳴らしている（`/etc/asound.conf` で出力先を pulse にしている）
+- **API キー**：`compose.yaml` には値を書かず、`ANTHROPIC_API_KEY` という名前だけを書いている。起動した端末の環境変数がそのまま渡る
+- **VOICEVOX の場所**：ノードは環境変数 `VOICEVOX_URL` を読む（無ければ `http://localhost:50021`）
+
 ## セットアップ（Python 仮想環境の作り方から）
 
 「仮想環境(venv)」= その実験専用の、独立した Python パッケージの箱。
 システムの Python を汚さずに、必要なものだけ入れられる。EasyOCR と PaddleOCR は依存パッケージがぶつかりやすいので、**箱は実験フォルダごとに分ける**。
 
 ```bash
-cd src/ocr_recognizer/paddleocr_test     # または easyocr_test
+cd ocr_recognizer/paddleocr_test     # または easyocr_test
 
 # ① 箱を作る（最初の 1 回だけ）
 python3 -m venv .venv

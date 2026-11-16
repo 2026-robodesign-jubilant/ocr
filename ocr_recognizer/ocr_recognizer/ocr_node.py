@@ -60,14 +60,15 @@ MODEL = 'claude-opus-5-5'
 # ベンチマークでは Haiku（'claude-haiku-5-5'）でも文字の読み取りは十分正確だった。
 # 料金や速さを優先したくなったら、ここを変えて比べてみる。
 
-VOICEVOX_URL = 'http://localhost:50021'   # VOICEVOX アプリが開く音声合成サーバー
+# VOICEVOX の音声合成サーバーの場所。Docker では環境変数 VOICEVOX_URL で変えられる
+VOICEVOX_URL = os.environ.get('VOICEVOX_URL', 'http://localhost:50021')
 SPEAKER = 3          # 話者の番号。3 = ずんだもん（2 = 四国めたん、8 = 春日部つむぎ など）
 SPEED = 1.2          # 話す速さ。1.0 が標準。要点（250 字くらい）が 1 分近くかかるので少し速める
 # 作った音声を人に聞かせるときは「VOICEVOX:ずんだもん」のようにクレジットを表示する決まりがある
 
 
 # ---- Claude から受け取る形 --------------------------------------------------
-# src/ocr_ai/2test.py と同じ。Claude はこの 4 つの欄を必ず埋めて返してくる。
+# ocr_ai/2test.py と同じ。Claude はこの 4 つの欄を必ず埋めて返してくる。
 
 class Reading(BaseModel):
     doc_type: str        # 文書の種類（請求書、お知らせ など）

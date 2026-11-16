@@ -1,0 +1,33 @@
+# OCR 班のノードと音声合成を Docker でまとめて動かすための設定。
+#
+# 使い方（リポジトリのルートで）:
+#   read -rs ANTHROPIC_API_KEY && export ANTHROPIC_API_KEY   # キーはファイルに書かず、端末から渡す
+#   docker compose up --build
+#
+# 詳しくは ocr_recognizer/README.md の「Docker で動かす」
+
+services:
+  # 音声合成サーバー（VOICEVOX ENGINE の公式イメージ）。デスクトップ版のアプリと同じ 50021 番で待つ
+  voicevox:
+    image: voicevox/voicevox_engine:cpu-ubuntu24.04-0.26.0
+    ports:
+      - "127.0.0.1:50021:50021"   # この PC の中からだけ使える。デスクトップ版の VOICEVOX アプリとは同時に起動できない（番号がぶつかる）
+
+  # OCR 班のノード：カメラ画像 → ArUco → Claude → VOICEVOX で読み上げ → /ocr/done
+  ocr:
+    build: ./ocr_recognizer
+    depends_on:
+      - voicevox
+    # ROS 2 の通信を、ホストや他のコンテナのノードとそのまま行うため、ホストのネットワークを使う
+    network_mode: host
+    ipc: host
+    environment:
+      - ANTHROPIC_API_KEY                         # 起動した端末の値をそのまま渡す
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}         # 他の班と同じ番号にそろえる
+      - FASTDDS_BUILTIN_TRANSPORTS=UDPv4          # コンテナ（root）とホストの間で共有メモリ通信が失敗するのを避ける
+      - VOICEVOX_URL=http://localhost:50021       # 上の voicevox（ホストの 50021 番に出ている）
+      - PULSE_SERVER=unix:/run/pulse/native       # 音はホストの PulseAudio / PipeWire で鳴らす
+      - PULSE_COOKIE=/run/pulse/cookie
+    volumes:
+      - ${XDG_RUNTIME_DIR}/pulse/native:/run/pulse/native
+      - ${HOME}/.config/pulse/cookie:/run/pulse/cookie:ro
