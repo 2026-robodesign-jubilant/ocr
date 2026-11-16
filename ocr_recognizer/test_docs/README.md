@@ -43,6 +43,7 @@ OCR エンジン（OSS と Claude）を同じ条件で比べるための、自�
 | `card/01_notice` | 避難訓練のお知らせ（Times 風の書体） |
 | `card/02_invoice` | 請求書（3 品目、小計 125.87・税 8.25% 10.38・合計 $136.25） |
 | `card/03_flyer` | ロボット講座のチラシ（枠囲み・箇条書き） |
+| `card/04_receipt` | 納品書。**押印欄（「Received by (Seal)」、一辺 24mm の四角）付き**で、はんこを押すテスト用。押印欄の中心の正解は `04_receipt.json`（`stamp_center_mm` = 台紙の向きで紙の左上から (78, 110) mm。stamp リポジトリの `card_target_publisher` の card 座標系と同じ） |
 | `card/sim_02_invoice.jpg` | `02_invoice` を斜めに置いて D435i くらいの画質にした**合成画像**（カメラなしで試す用） |
 
 台紙の仕様:
