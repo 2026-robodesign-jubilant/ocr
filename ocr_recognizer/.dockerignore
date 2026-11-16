@@ -1,0 +1,11 @@
+# イメージに入れないもの（ノードを動かすのに要らない・大きい）
+benchmark/
+easyocr_test/
+paddleocr_test/
+test_docs/
+build/
+install/
+log/
+**/.venv/
+**/venv/
+**/__pycache__/

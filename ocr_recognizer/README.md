@@ -15,6 +15,8 @@ ArUco 班が出す「正対補正した紙の画像」を入力にして、読�
 - **LLM（Claude）での翻訳・読み上げ文の生成は動作確認済み**（[`../ocr_ai/`](../ocr_ai/)）。Python 版に加えて Rust 版（`claude_rs`）も動く。
 - **VOICEVOX での音声合成も動作確認済み**（[`../ocr_voicevox/`](../ocr_voicevox/)）。
 - **正対補正は OCR 班でやることに決定**。カメラ画像を直接受け取り、ArUco の検出から補正まで OCR 側で行う（下の「これから」）。
+- **ROS 2 パッケージ化した。** ノード `ocr_node` は、カメラ画像からカードを見つけて補正し、Claude で日本語の読み上げ文を作るところまで動く（合成画像で確認。下の「ROS 2 ノード」）。
+- **読む紙は小さいカード（A5、ArUco ID 1〜4）に変更**（[`test_docs/card/`](test_docs/card/)）。
 
 ## これまでの結果
 
@@ -78,8 +80,126 @@ OCR の結果（英語）を Claude に渡し、日本語の読み上げ文に�
 | `paddleocr_test/` | PaddleOCR の実験（`test.py`、`requirements.txt`） |
 | `test_docs/` | テスト文書と撮影写真（[`test_docs/README.md`](test_docs/README.md)） |
 | `benchmark/` | 比較ベンチマーク（[`benchmark/README.md`](benchmark/README.md)） |
+| `ocr_recognizer/ocr_node.py` `ocr_recognizer/prompt.py` | ROS 2 ノードの本体と、Claude への指示文 |
+| `package.xml` `setup.py` `setup.cfg` `resource/` `test/` | ROS 2 パッケージの設定（`ros2 pkg create` で作ったもの） |
 
 `.venv/`（Python 仮想環境）はどのフォルダでも **git 管理外**。各自が自分の PC で作る。
+
+実験用のフォルダ（`benchmark/` `easyocr_test/` `paddleocr_test/`）には空のファイル `COLCON_IGNORE` を置いてある。
+colcon が中の `.venv` などを ROS のパッケージと勘違いしないようにするため。
+
+## ROS 2 ノード（`ocr_node`）
+
+カメラ画像のトピック `/camera/camera/color/image_raw` を購読し、次の順に処理する（ここまでで OCR 班の担当分は一通りそろった）。
+
+1. ArUco マーカー（ID 1〜4）を 4 つ探す
+2. マーカーが「止まったまま 1 秒」見えたら、その紙を読むと決める（同じ紙は 1 回だけ。マーカーが見えなくなったらリセット）
+3. 紙を真上から見た形に補正し、読む向きに 90 度回す（確認用に `/tmp/rectified.png` に保存）
+4. 補正した画像を Claude に直接送り、`Reading`（種類・要点・全文・不明な点）を受け取ってログに出す
+5. 要点を VOICEVOX で音声にしてスピーカーで鳴らす（話者はずんだもん、速さ 1.2 倍）。読めなかった所があれば「原本で確認してください」と付け足す
+6. `/ocr/done`（`std_msgs/String`）を出す。中身は読み上げた要点。**途中で失敗したときも空の文字列で出す**（アームが待ち続けないように）
+
+4〜6 は合わせて数十秒かかるので別スレッドで動かし、その間に届いた画像は無視する。
+
+| ファイル | 中身 |
+|---|---|
+| `ocr_recognizer/ocr_node.py` | ノード本体。上の方の「設定」に、紙の寸法・安定判定の秒数・使うモデルをまとめてある |
+| `ocr_recognizer/prompt.py` | Claude への指示文。`../ocr_ai/system_prompt.txt` を「入力が画像」向けに書き換えたもの |
+
+### 読む紙（カード）
+
+台紙は [`test_docs/card/corner0.pdf`](test_docs/card/corner0.pdf)（詳しくは [`test_docs/README.md`](test_docs/README.md)）。
+
+- A4 の上半分（210 × 148.5 mm）を切り取って使う。**台紙の右端が、読むときの上**（読む向きでは A5 縦）
+- ArUco `DICT_4X4_50` の **ID 1〜4**。台紙の向きで左上 1・右上 2・右下 3・左下 4
+- 黒い四角は一辺 **30mm**、紙の端から 15.5mm（白い余白 7.5mm を含めると 8mm）
+
+### 準備（最初の 1 回だけ）
+
+ノードは Claude の SDK（`anthropic`）を使う。システムの Python には入っていないので、**ROS も使える仮想環境**を作って入れる。
+
+ワークスペースは `~/ros2/jubilant_ws`、このリポジトリはその `src/ocr` に置く前提（`git clone https://github.com/2026-robodesign-jubilant/ocr.git ~/ros2/jubilant_ws/src/ocr`）。
+
+```bash
+cd ~/ros2/jubilant_ws
+python3 -m venv --system-site-packages .venv     # ROS・OpenCV もそのまま使える仮想環境
+touch .venv/COLCON_IGNORE                         # colcon に中を探させない
+.venv/bin/pip install anthropic "pydantic>=2" "brotli>=1.2"
+sudo apt install ros-jazzy-image-publisher        # カメラなしで試すとき用
+```
+
+`setup.cfg` の `[build_scripts]` で、ノードは「そのとき有効な仮想環境の Python」で動くようにしてある。
+
+### ビルドと実行
+
+**必ずワークスペースのルート（`~/ros2/jubilant_ws`）で** ビルドする（リポジトリやパッケージの中で実行すると、そこに `build/` `install/` `log/` ができてしまう）。
+
+```bash
+cd ~/ros2/jubilant_ws
+source .venv/bin/activate                              # 端末を開くたびに
+source install/setup.bash                              # 端末を開くたびに（ビルド後）
+read -rs ANTHROPIC_API_KEY && export ANTHROPIC_API_KEY # 端末を開くたびに。キーは画面にも履歴にも残らない
+# VOICEVOX のアプリを起動しておく（開いている間だけ http://localhost:50021 で音声合成が動く）
+colcon build --packages-select ocr_recognizer
+ros2 run ocr_recognizer ocr_node
+```
+
+### カメラなしで試す（画像をトピックに流す）
+
+```bash
+# 別の端末で。カードを斜めに撮った想定の合成画像を、カメラと同じトピック名で 1 秒に 2 回流す
+ros2 run image_publisher image_publisher_node \
+  src/ocr/ocr_recognizer/test_docs/card/sim_02_invoice.jpg \
+  --ros-args -r image_raw:=/camera/camera/color/image_raw -p publish_rate:=2.0
+```
+
+- `sim_02_invoice.jpg` は `test_docs/card/02_invoice.pdf` を机の上に斜めに置き、D435i くらいの画質に落とした**合成画像**（本物の写真ではない）
+- ノードのログに、約 1 秒後に `紙を見つけました`、10〜20 秒後に `要点:` が出れば OK。答え合わせは `test_docs/card/02_invoice.txt`（合計 $136.25・支払期限 12/15/2026）
+- 終わったら、流している端末を **`Ctrl+C` で止める**。流しっぱなしだと、次にノードを起動したときにまた読んでしまう（Claude の料金がかかる）
+- 流れているかの確認は `ros2 topic hz /camera/camera/color/image_raw`、画像を見るなら `ros2 run rqt_image_view rqt_image_view`
+- 他の人のノードと混ざらないように試したいときは、両方の端末で `export ROS_DOMAIN_ID=77` のように同じ別の番号にする
+
+### ハマりどころ（ROS 2 ノード）
+
+- **`Package 'ocr_recognizer' not found`** → その端末で `source install/setup.bash` をしていない
+- **`ModuleNotFoundError: No module named 'anthropic'`** → その端末で `source .venv/bin/activate` をしていない
+- **`Claude につながりません ... process() takes no keyword arguments`** → 仮想環境の brotli が古い（apt の 1.1 が使われている）。`.venv/bin/pip install "brotli>=1.2"`。このエラーは**返事を受け取った後**に起きるので、Claude の料金はかかっている（SDK が自動で最大 3 回やり直す）
+- **`ANTHROPIC_API_KEY が設定されていません`** → その端末で `read -rs ANTHROPIC_API_KEY && export ANTHROPIC_API_KEY`
+- **「画像を待っています」のまま** → 誰も画像を流していない。上の `image_publisher` を別の端末で動かす
+- **`VOICEVOX につながりません`** → VOICEVOX のアプリが閉じている。開いてから、紙を置き直す（画像を流し直す）
+- **音が出ない（`aplay が失敗`）** → スピーカーの出力先を確認。`aplay` の代わりに `pw-play` や `paplay` でも鳴らせる
+- 読み上げた音声を人に聞かせるときは、**「VOICEVOX:ずんだもん」のようにクレジットを表示する**（話者を変えたらその名前）
+- **`import cv2` や `cv_bridge` が numpy のエラーで落ちる** → `~/.local` に pip で入れた numpy 2.x が、システムの numpy 1.26 より優先されている。`~/.local/lib/python3.12/site-packages/` の `numpy` 関係を消す（`pip uninstall` には `--user` の指定がない）
+- **Ubuntu 24.04 の OpenCV は 4.6** なので、`cv2.aruco.ArucoDetector`（4.7 以降）は使えない。`cv2.aruco.detectMarkers(gray, dictionary)` の書き方を使う
+- **`colcon build --packages-select` の名前は `ocr_recognizer`**（アンダースコア）。`ocr-recognizer` だと無視される
+- `package.xml` の `<depend>` は重複・大文字小文字の違いがあると、パッケージとして読み込まれない
+- エラーが出たら、Python のエラーは**一番下の行**から読む。`/opt/ros/...` の行は ROS の内部なので読み飛ばしてよい
+
+## Docker で動かす（本番用）
+
+本番では、チームそれぞれのノードを Docker でまとめて動かす。OCR 班の分は、リポジトリのルートの [`compose.yaml`](../compose.yaml) にある 2 つのサービス。
+
+| サービス | 中身 |
+|---|---|
+| `ocr` | このパッケージ（[`Dockerfile`](Dockerfile)）。ROS 2 Jazzy ＋ cv_bridge ＋ OpenCV ＋ anthropic。起動すると `ocr_node` が動く |
+| `voicevox` | VOICEVOX ENGINE の公式イメージ（`voicevox/voicevox_engine:cpu-ubuntu24.04-0.26.0`）。デスクトップ版のアプリの代わり |
+
+```bash
+cd ~/ros2/jubilant_ws/src/ocr
+read -rs ANTHROPIC_API_KEY && export ANTHROPIC_API_KEY   # キーはファイルに書かない。この端末の値がコンテナに渡る
+docker compose up --build                                # 初回はイメージ作成に数分かかる
+```
+
+- **デスクトップ版の VOICEVOX アプリは閉じておく**（同じ 50021 番を使うので、ぶつかる）
+- 止めるときは `Ctrl+C`、片付けるときは `docker compose down`
+- カメラなしで試すときは、ホストで写真を流す（上の「カメラなしで試す」と同じ）。コンテナはホストのネットワークを使うので、そのまま届く
+
+**つくりの要点**（他の班が自分の Dockerfile を書くときの参考にもなる）
+- **ROS 2 の通信**：`network_mode: host` と `ipc: host` で、ホストや他のコンテナのノードと直接やりとりする。`ROS_DOMAIN_ID` はチームでそろえる
+- **`FASTDDS_BUILTIN_TRANSPORTS=UDPv4`**：コンテナは root で動くので、ホストの一般ユーザーのノードと共有メモリで通信しようとすると失敗することがある。UDP だけを使わせて避けている
+- **音**：コンテナの中の `aplay` を、ホストの PulseAudio / PipeWire（`$XDG_RUNTIME_DIR/pulse/native`）につないで鳴らしている（`/etc/asound.conf` で出力先を pulse にしている）
+- **API キー**：`compose.yaml` には値を書かず、`ANTHROPIC_API_KEY` という名前だけを書いている。起動した端末の環境変数がそのまま渡る
+- **VOICEVOX の場所**：ノードは環境変数 `VOICEVOX_URL` を読む（無ければ `http://localhost:50021`）
 
 ## セットアップ（Python 仮想環境の作り方から）
 
@@ -87,7 +207,7 @@ OCR の結果（英語）を Claude に渡し、日本語の読み上げ文に�
 システムの Python を汚さずに、必要なものだけ入れられる。EasyOCR と PaddleOCR は依存パッケージがぶつかりやすいので、**箱は実験フォルダごとに分ける**。
 
 ```bash
-cd src/ocr_recognizer/paddleocr_test     # または easyocr_test
+cd ocr_recognizer/paddleocr_test     # または easyocr_test
 
 # ① 箱を作る（最初の 1 回だけ）
 python3 -m venv .venv
@@ -147,7 +267,11 @@ cd paddleocr_test && python test.py        # PaddleOCR
 - 正対補正は OCR 班で行う（決定）:
   - D435i のカラー画像（1920×1080）を直接購読し、`cv2.aruco` でマーカーを検出 → 補正（1mm = 10px）。[`benchmark/rectify.py`](benchmark/rectify.py) の処理を使う
   - ArUco 班が出しているのはマーカーの 3D の位置と姿勢（アーム用）なので、補正には使わず OCR 側で検出し直す（検出は数ミリ秒で済む）
-  - 読むのは、4 つのマーカーが数フレーム続けて同じ位置に見えたとき（アームが止まって紙が安定したとき）に 1 回だけ。読み上げが終わったら `/ocr/done`（仮）で合図を出す
-  - マーカーの仕様は ArUco 班と共通: DICT_4X4_50、ID 0〜3、一辺 25mm、紙の端から 10mm 内側、左上を 0 として時計回り
-  - 未決: A4 横の紙の見分け方（別の ID を使うか、マーカーの実寸から計算するか）
-- ROS 2 パッケージ化（`ros2 pkg create`）して、画像トピックを購読 → 読み取り → 翻訳 → 読み上げ、を 1 つのノードにする（ROS 2 で正式に使える Python で書く）。
+  - 読むのは、4 つのマーカーが止まったまま 1 秒見えたとき（アームが止まって紙が安定したとき）に 1 回だけ。読み上げが終わったら `/ocr/done`（仮）で合図を出す
+  - マーカーの仕様は ArUco 班と共通: カードの台紙 `test_docs/card/corner0.pdf`（DICT_4X4_50、ID 1〜4、一辺 30mm）
+- `ocr_node` を段階的に作る（ROS 2 で正式に使える Python で書く）:
+  1. ✅ 画像トピックを購読して受け取る
+  2. ✅ ArUco の検出と補正（`rectify.py` の処理を OpenCV 4.6 の書き方で移した。カード用に、台紙の向きで補正してから 90 度回す）
+  3. ✅ 安定判定（止まったまま 1 秒で 1 回だけ）と、補正した画像を Claude に直接渡して `Reading` を受け取る（OCR と翻訳を 1 回でまとめる。合成画像で 13 秒・数字は全部正解）
+  4. ✅ `summary` を VOICEVOX で音声にして再生し、`/ocr/done` を出す（実機の VOICEVOX アプリで確認済み）
+  - カードを印刷して、本物の D435i で撮った画像で確かめる
